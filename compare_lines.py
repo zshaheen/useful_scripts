@@ -19,10 +19,12 @@ file1 = '/global/cscratch1/sd/zshaheen/E3SM_simulations/20180129.DECKv1b_piContr
 file2 = '/global/cscratch1/sd/zshaheen/new_model_running_01_29_2019/piControl/atm_global.txt'
 
 file1_start, file1_end = 0, 481
-file2_start, file2_end = 3661681, 3662161
+file2_start, file2_end = 3661681-7+41000, 3662162-7+41000
 
 if (file1_end - file1_start) != (file2_end - file2_start):
-    raise RuntimeError('Both file ranges need to be the same.')
+    msg = 'Both file ranges need to be the same: '
+    msg += 'you have file1 ({}) and file2({}).'.format(file1_end-file1_start, file2_end-file2_start)
+    raise RuntimeError(msg)
 
 f1_offset = get_offset_for_linenum(file1, file1_start)
 f2_offset = get_offset_for_linenum(file2, file2_start)
