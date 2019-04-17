@@ -5,6 +5,7 @@ Testing the synchronus printing of stuff, like how
 import sys
 import multiprocessing
 import collections
+import ctypes
 
 
 class NotYourTurnError(BaseException):
@@ -30,8 +31,14 @@ class PrintMonitor(multiprocessing.Condition().__class__):
             msg = "You must pass in a list of tars, which dictates"
             msg += " the order of which to print the results."
             raise RuntimeError(msg)
-        self._tars_to_print = collections.deque(sorted(tars_to_print))
-        self._current_tar = self._tars_to_print.popleft()
+        # This is modified by different processes, so it needs to be in shared memory.
+        # self._tars_to_print = collections.deque(sorted(tars_to_print))
+        self._tars_to_print = multiprocessing.Queue()
+        for tar in tars_to_print:
+            self._tars_to_print.put(tar)
+        # self._current_tar = multiprocessing.Value(ctypes.c_char_p, self._tars_to_print.popleft())
+        self._manager = multiprocessing.Manager()
+        self._current_tar = self._manager.Value(ctypes.c_char_p, self._tars_to_print.get())
 
     def wait_turn(self, worker, workers_curr_tar, *args, **kwargs):
         """
@@ -46,10 +53,10 @@ class PrintMonitor(multiprocessing.Condition().__class__):
 
         #####with self.cv:
         with self:
-            while self._current_tar != workers_curr_tar:
+            while self._current_tar.value != workers_curr_tar:
                 try:
                     print(worker.name, ' is waiting in wait_turn() cause...')
-                    print('self._current_tar', self._current_tar)
+                    print('self._current_tar.value', self._current_tar.value)
                     print('workers_curr_tar', workers_curr_tar)
                     #####self.cv.wait(*args, **kwargs)
                     self.wait(*args, **kwargs)
@@ -67,19 +74,19 @@ class PrintMonitor(multiprocessing.Condition().__class__):
         # It must be the worker's turn before this can happen.
         self.wait_turn(worker, workers_curr_tar, *args, **kwargs)
 
-        if self._tars_to_print:
-            self._current_tar = self._tars_to_print.popleft()
-        else:
-            self._current_tar = None
+        
 
         """
         with self.cv:
             self.cv.notify_all()
         """
         with self:
+            # self._current_tar.value = self._get_next_tar()
+            self._current_tar.value = self._tars_to_print.get() if not self._tars_to_print.empty() else ''
+            print('self._current_tar.value', self._current_tar.value)
             self.notify_all()
 
-        print('Going from {} to {}'.format(workers_curr_tar, self._current_tar))
+        print('Going from {} to {}'.format(workers_curr_tar, self._current_tar.value))
 
 # class ExtractWorker(multiprocessing.Process):
 class ExtractWorker(object):
