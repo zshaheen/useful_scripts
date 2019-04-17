@@ -41,8 +41,8 @@ class PrintMonitor(multiprocessing.Condition().__class__):
         A process can pass in a timeout, and if the turn
         isn't given within that, a NotYourTurnError is raised.
         """
-        print('wait_turn args', args)
-        print('wait_turn kwargs', kwargs)
+        # print('wait_turn args', args)
+        # print('wait_turn kwargs', kwargs)
 
         #####with self.cv:
         with self:
@@ -186,7 +186,7 @@ class ExtractWorker(object):
             # Since we just finished printing all of it, we can move onto the next one.
             if self.is_output_done_enqueuing[tar_to_print]:
                 # Let all of the other workers know that this worker is done.
-                print(self.name, 'is letting the others know its done.')
+                print(self.name, 'is letting the others know it is done.')
                 self.print_monitor.done_dequeuing_output_for_tar(self, tar_to_print)
 
 import logging
@@ -209,17 +209,18 @@ def print_tars(tars_to_print, multiprocess_worker=None):
 
         # We print the info for each tar twice.
         for i in range(2):
-
             logger.info('try {}: {} tar is doing work'.format(i, tar))
             logger.info('try {}: {} tar is doing work 1'.format(i, tar))
             logger.info('try {}: {} tar is doing work 2'.format(i, tar))
             logger.info('try {}: {} tar is doing work 3'.format(i, tar))
 
+            if i == 1:
+                multiprocess_worker.done_enqueuing_output_for_tar(tar)
+                print('{} work is done being enqueued.'.format(tar))
+
             if multiprocess_worker:
                 multiprocess_worker.print_contents()
             # time.sleep(1)
-        if multiprocess_worker:
-            multiprocess_worker.done_enqueuing_output_for_tar(tar)
 
     if multiprocess_worker:
         # If there are stuff left to print, print them.
@@ -235,9 +236,9 @@ def print_tars(tars_to_print, multiprocess_worker=None):
 
 
 
-tars = ['0.tar', '3.tar', '4.tar', '7.tar', '10.tar', '12.tar', '15.tar']
+tars = ['00.tar', '03.tar', '04.tar', '07.tar', '10.tar', '12.tar', '15.tar']
 # We're testing with three workers.
-workers_to_tar = [['0.tar', '7.tar','15.tar'], ['3.tar', '12.tar'], ['4.tar','10.tar']]
+workers_to_tar = [['00.tar', '07.tar','15.tar'], ['03.tar', '12.tar'], ['04.tar','10.tar']]
 monitor = PrintMonitor(tars)
 
 # The return value for extractFiles will be added here.
