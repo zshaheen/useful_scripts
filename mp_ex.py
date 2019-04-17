@@ -15,28 +15,30 @@ class NotYourTurnError(BaseException):
     """
     pass
 
-#class PrintMonitor(object):
-class PrintMonitor(multiprocessing.Condition().__class__):
+class PrintMonitor(object):
     """
     Used to synchronize the printing of the output between workers.
     Depending on the current_tar, the worker processing the work
     for that tar will print it's output.
     """        
     def __init__(self, tars_to_print, *args, **kwargs):
-        #####self.cv = multiprocessing.Condition()
-        super(PrintMonitor, self).__init__(*args, **kwargs)
         # A list of tars to print.
         # Ex: ['000000.tar', '000008.tar', '00001a.tar']
         if not tars_to_print:
             msg = "You must pass in a list of tars, which dictates"
             msg += " the order of which to print the results."
             raise RuntimeError(msg)
-        # This is modified by different processes, so it needs to be in shared memory.
-        # self._tars_to_print = collections.deque(sorted(tars_to_print))
+        
+        # The variables below are modified/accessed by different processes,
+        # so they need to be in shared memory.
+        self._cv = multiprocessing.Condition()
+
         self._tars_to_print = multiprocessing.Queue()
         for tar in tars_to_print:
             self._tars_to_print.put(tar)
-        # self._current_tar = multiprocessing.Value(ctypes.c_char_p, self._tars_to_print.popleft())
+
+        # We need a manager to instantiate the Value instead of multiprocessing.Value.
+        # If we didn't use a manager, it seems to get some junk value.
         self._manager = multiprocessing.Manager()
         self._current_tar = self._manager.Value(ctypes.c_char_p, self._tars_to_print.get())
 
@@ -48,20 +50,11 @@ class PrintMonitor(multiprocessing.Condition().__class__):
         A process can pass in a timeout, and if the turn
         isn't given within that, a NotYourTurnError is raised.
         """
-        # print('wait_turn args', args)
-        # print('wait_turn kwargs', kwargs)
-
-        #####with self.cv:
-        with self:
+        with self._cv:
             while self._current_tar.value != workers_curr_tar:
                 try:
-                    print(worker.name, ' is waiting in wait_turn() cause...')
-                    print('self._current_tar.value', self._current_tar.value)
-                    print('workers_curr_tar', workers_curr_tar)
-                    #####self.cv.wait(*args, **kwargs)
-                    self.wait(*args, **kwargs)
-                except RuntimeError as e:
-                    print(e)
+                    self._cv.wait(*args, **kwargs)
+                except RuntimeError:
                     raise NotYourTurnError()
 
     def done_dequeuing_output_for_tar(self, worker, workers_curr_tar, *args, **kwargs):
@@ -74,24 +67,16 @@ class PrintMonitor(multiprocessing.Condition().__class__):
         # It must be the worker's turn before this can happen.
         self.wait_turn(worker, workers_curr_tar, *args, **kwargs)
 
-        
-
-        """
-        with self.cv:
-            self.cv.notify_all()
-        """
-        with self:
-            # self._current_tar.value = self._get_next_tar()
+        with self._cv:
             self._current_tar.value = self._tars_to_print.get() if not self._tars_to_print.empty() else ''
-            print('self._current_tar.value', self._current_tar.value)
-            self.notify_all()
+            self._cv.notify_all()
 
-        print('Going from {} to {}'.format(workers_curr_tar, self._current_tar.value))
 
-# class ExtractWorker(multiprocessing.Process):
 class ExtractWorker(object):
     """
-    A regular Process, but with a PrintMonitor, it prints to the
+    An object that is attached to a Process.
+    It redirects all of the output of the logging module to a queue.
+    Then with a PrintMonitor, it prints to the
     terminal in the order defined by the PrintMonitor.
     
     This worker is called during `zstash extract`.
@@ -115,18 +100,15 @@ class ExtractWorker(object):
             # So we need to provide a function like this.
             pass
 
-    def __init__(self, name, print_monitor, tars_to_work_on, failure_queue, *args, **kwargs):
+    def __init__(self, print_monitor, tars_to_work_on, failure_queue, *args, **kwargs):
         """
         print_monitor is used to determine if it's this worker's turn to print.
         tars_to_work_on is a list of the tars that this worker will process.
         """
-        # super(ExtractWorker, self).__init__(*args, **kwargs)
-        ###self.orig_stdout = sys.stdout
+        self.print_monitor = print_monitor
         # Every call to print() in the original function will
         # be piped to this queue instead of the screen.
-        self.name = name
         self.print_queue = self.PrintQueue()
-        self.print_monitor = print_monitor
         # A tar is mapped to True when all of its output is in the queue.
         self.is_output_done_enqueuing = {tar:False for tar in tars_to_work_on}
         # After extractFiles is done, all of the failures will be added to this queue.
@@ -145,6 +127,11 @@ class ExtractWorker(object):
         if not tar in self.is_output_done_enqueuing:
             msg = 'This tar {} isn\'t assigned to this worker.'
             raise RuntimeError(msg.format(tar))
+
+        if self.is_output_done_enqueuing[tar]:
+            msg = 'This tar ({}) was already told to be done.'
+            raise RuntimeError(msg.format(tar))
+
         self.is_output_done_enqueuing[tar] = True
     
     def print_contents(self):
@@ -153,11 +140,9 @@ class ExtractWorker(object):
         """
         try:
             # Wait for 0.001 seconds to see if it's our turn.
-            # self.print_all_contents(0.001)
-            self.print_all_contents()
+            self.print_all_contents(0.001)
         except NotYourTurnError:
             # It's not our turn, so try again the next time this function is called.
-            print('It is NOT ', self.name, 'turn. Try again.')
             pass
     
     def has_to_print(self):
@@ -173,27 +158,24 @@ class ExtractWorker(object):
         If it's not our turn and the passed in timeout to print_monitor.wait_turn
         is over, a NotYourTurnError exception is raised.
         """
-        print(self.name, 'is trying to print something...')
         while self.has_to_print():
-            print(self.name, 'HAS to print something...')
+            # print(self.name, 'HAS to print something...')
             # Try to print the first element in the queue.
             tar_to_print = self.print_queue[0].tar
-            print(tar_to_print)
+            # print(tar_to_print)
             self.print_monitor.wait_turn(self, tar_to_print, *args, **kwargs)
-            print('It is ', self.name, 'turn now')
+            # print('It is ', self.name, 'turn now')
 
             # Print all applicable values in the print_queue.
             while self.print_queue and self.print_queue[0].tar == tar_to_print:
                 msg = self.print_queue.popleft().msg
-                #self.orig_stdout.write('QUEUE' + msg)
-                #self.orig_stdout.write('\n')
-                print('QUEUE', msg)
+                print(msg)
 
             # If True, then all of the output for extracting tar_to_print was in the queue.
             # Since we just finished printing all of it, we can move onto the next one.
             if self.is_output_done_enqueuing[tar_to_print]:
                 # Let all of the other workers know that this worker is done.
-                print(self.name, 'is letting the others know it is done.')
+                # print(self.name, 'is letting the others know it is done.')
                 self.print_monitor.done_dequeuing_output_for_tar(self, tar_to_print)
 
 import logging
@@ -223,7 +205,7 @@ def print_tars(tars_to_print, multiprocess_worker=None):
 
             if i == 1:
                 multiprocess_worker.done_enqueuing_output_for_tar(tar)
-                print('{} work is done being enqueued.'.format(tar))
+                # print('{} work is done being enqueued.'.format(tar))
 
             if multiprocess_worker:
                 multiprocess_worker.print_contents()
@@ -231,14 +213,14 @@ def print_tars(tars_to_print, multiprocess_worker=None):
 
     if multiprocess_worker:
         # If there are stuff left to print, print them.
-        print('trying to print ALL (ALL!!) contents of', multiprocess_worker)
+        # print('trying to print ALL (ALL!!) contents of', multiprocess_worker)
         multiprocess_worker.print_all_contents()
         # Add the failures to the queue.
         '''
         for f in failures:
             multiprocess_worker.failure_queue.add(f)
         '''
-        print('DONE PRINTING THE CONTENTS OF', multiprocess_worker)
+        # print('DONE PRINTING THE CONTENTS OF', multiprocess_worker)
 
 
 
@@ -252,11 +234,10 @@ monitor = PrintMonitor(tars)
 failures = multiprocessing.Queue()
 processes = []
 for i, tars_for_this_worker in enumerate(workers_to_tar):
-    worker = ExtractWorker('Worker {}'.format(i), monitor, tars_for_this_worker, failures)
+    worker = ExtractWorker(monitor, tars_for_this_worker, failures)
     process = multiprocessing.Process(target=print_tars, args=(tars_for_this_worker, worker))
     process.start()
     processes.append(process)
 
 for p in processes:
     p.join()
-
